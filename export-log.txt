@@ -1,0 +1,45 @@
+Using src/app as the root directory for Expo Router.
+React Compiler enabled
+Starting Metro Bundler
+
+Android Bundling failed 527ms node_modules\expo-router\entry.js (1750 modules)
+Unable to resolve "@/assets/images/expo-badge-white.png" from "src\components\web-badge.tsx"
+[0m [90m 18 |[39m       [33m<[39m[33mImage[39m
+ [90m 19 |[39m         source[33m=[39m{
+[31m[1m>[22m[39m[90m 20 |[39m           scheme [33m===[39m [32m'dark'[39m
+ [90m    |[39m           [31m[1m^[22m[39m
+ [90m 21 |[39m             [33m?[39m require([32m'@/assets/images/expo-badge-white.png'[39m)
+ [90m 22 |[39m             [33m:[39m require([32m'@/assets/images/expo-badge.png'[39m)
+ [90m 23 |[39m         }[0m
+
+Import stack:
+
+ src\components\web-badge.tsx
+ | import "@/assets/images/expo-badge-white.png"
+
+ src\app\explore.tsx
+ | import "@/components/web-badge"
+
+ src\app (require.context)
+
+
+Error: Unable to resolve module @/assets/images/expo-badge-white.png from C:\Users\Yurii\Desktop\TIX_stage2_ui\src\components\web-badge.tsx: @/assets/images/expo-badge-white.png could not be found within the project or in these directories:
+  node_modules
+[0m [90m 18 |[39m       [33m<[39m[33mImage[39m
+ [90m 19 |[39m         source[33m=[39m{
+[31m[1m>[22m[39m[90m 20 |[39m           scheme [33m===[39m [32m'dark'[39m
+ [90m    |[39m           [31m[1m^[22m[39m
+ [90m 21 |[39m             [33m?[39m require([32m'@/assets/images/expo-badge-white.png'[39m)
+ [90m 22 |[39m             [33m:[39m require([32m'@/assets/images/expo-badge.png'[39m)
+ [90m 23 |[39m         }[0m
+
+Import stack:
+
+ src\components\web-badge.tsx
+ | import "@/assets/images/expo-badge-white.png"
+
+ src\app\explore.tsx
+ | import "@/components/web-badge"
+
+ src\app (require.context)
+

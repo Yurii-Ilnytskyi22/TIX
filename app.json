@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "TIX",
+    "slug": "tix-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "tix",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.yurii.ilnytskyi.tixapp"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#09090b",
+        "foregroundImage": "./assets/adaptive-icon.png"
+      },
+      "package": "com.yurii.ilnytskyi.tixapp"
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#09090b",
+          "image": "./assets/splash.png",
+          "imageWidth": 200
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-notifications",
+      "expo-image",
+      "expo-web-browser"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "149ce566-dba9-4f01-8644-4984a83452ef"
+      },
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/149ce566-dba9-4f01-8644-4984a83452ef",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    }
+  }
+}
