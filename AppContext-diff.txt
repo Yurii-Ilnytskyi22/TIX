@@ -1,0 +1,917 @@
+diff --git a/src/context/AppContext.tsx b/src/context/AppContext.tsx
+index 917d6b2..9f57f4f 100644
+--- a/src/context/AppContext.tsx
++++ b/src/context/AppContext.tsx
+@@ -1,5 +1,11 @@
+ 
+-import React, { createContext, useContext, useState, useEffect } from 'react';
++import React, {
++  createContext,
++  useContext,
++  useState,
++  useEffect,
++  useRef,
++} from 'react';
+ import AsyncStorage from '@react-native-async-storage/async-storage';
+ import { getLocalDateString, getLocalMonthString } from '../utils/date';
+ import {
+@@ -158,6 +164,24 @@ interface AppContextType {
+ 
+ const AppContext = createContext<AppContextType | undefined>(undefined);
+ 
++type StorageKey =
++  | 'tix_calendar_entries'
++  | 'tix_workplaces'
++  | 'tix_payouts'
++  | 'tix_notes'
++  | 'tix_currency'
++  | 'tix_username'
++  | 'tix_theme'
++  | 'tix_accent_color';
++
++function createId(): string {
++  return `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
++}
++
++function roundMoney(value: number): number {
++  return Math.round((value + Number.EPSILON) * 100) / 100;
++}
++
+ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+   children,
+ }) => {
+@@ -171,9 +195,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+   const [theme, setThemeState] = useState<'dark' | 'light'>('dark');
+   const [accentColor, setAccentColorState] = useState<string>('#38bdf8');
+ 
+-  // Завантаження збережених даних при старті
++  // Актуальні значення стану для асинхронних операцій.
++  const entriesRef = useRef(entries);
++  const workplacesRef = useRef(workplaces);
++  const payoutsRef = useRef(payouts);
++  const notesRef = useRef(notes);
++
++  const currencyRef = useRef(currency);
++  const userNameRef = useRef(userName);
++  const themeRef = useRef(theme);
++  const accentColorRef = useRef(accentColor);
++
++  // Черга записів: операції AsyncStorage виконуються послідовно.
++  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
++
++  // Не дозволяємо змінам випереджати початкове завантаження.
++  const loadPromiseRef = useRef<Promise<void>>(Promise.resolve());
++  const loadedRef = useRef(false);
++
++  // Захист від застарілих операцій із нагадуваннями.
++  const notificationVersionsRef = useRef<Map<string, number>>(new Map());
++
++  const nextNotificationVersion = (key: string): number => {
++    const next =
++      (notificationVersionsRef.current.get(key) ?? 0) + 1;
++
++    notificationVersionsRef.current.set(key, next);
++    return next;
++  };
++
++  const isNotificationVersionCurrent = (
++    key: string,
++    version: number,
++  ): boolean => {
++    return notificationVersionsRef.current.get(key) === version;
++  };
++
++  const enqueueSave = (
++    key: StorageKey,
++    value: unknown,
++  ): Promise<void> => {
++    const serialized = JSON.stringify(value);
++
++    const operation = saveQueueRef.current
++      .catch(() => undefined)
++      .then(async () => {
++        await AsyncStorage.setItem(key, serialized);
++      });
++
++    saveQueueRef.current = operation.catch((error) => {
++      console.error(`Не вдалося зберегти ${key}:`, error);
++    });
++
++    return saveQueueRef.current;
++  };
++
++  const waitUntilLoaded = async (): Promise<void> => {
++    await loadPromiseRef.current;
++  };
++
++  // ---------------- ЗАВАНТАЖЕННЯ ДАНИХ ----------------
++
+   useEffect(() => {
+-    const loadData = async () => {
++    let mounted = true;
++
++    const loadData = async (): Promise<void> => {
+       try {
+         const [
+           savedEntries,
+@@ -195,247 +281,309 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+           AsyncStorage.getItem('tix_accent_color'),
+         ]);
+ 
+-        if (savedEntries) {
+-          setEntries(JSON.parse(savedEntries));
+-        }
++        if (!mounted) return;
++
++        const parsedEntries = savedEntries
++          ? JSON.parse(savedEntries)
++          : {};
++
++        const parsedWorkplaces = savedWorkplaces
++          ? JSON.parse(savedWorkplaces)
++          : [];
+ 
+-        // Старе значення перерви 30 хвилин змінюємо на 0.
+-        if (savedWorkplaces) {
+-          const parsedWorkplaces: unknown = JSON.parse(savedWorkplaces);
++        const parsedPayouts = savedPayouts
++          ? JSON.parse(savedPayouts)
++          : [];
+ 
+-          if (Array.isArray(parsedWorkplaces)) {
+-            const normalizedWorkplaces: Workplace[] =
+-              parsedWorkplaces.map((workplace: Workplace) => ({
++        const parsedNotes = savedNotes
++          ? JSON.parse(savedNotes)
++          : [];
++
++        const safeEntries =
++          parsedEntries &&
++          typeof parsedEntries === 'object' &&
++          !Array.isArray(parsedEntries)
++            ? parsedEntries as Record<string, CalendarItem[]>
++            : {};
++
++        const safeWorkplaces: Workplace[] =
++          Array.isArray(parsedWorkplaces)
++            ? parsedWorkplaces.map((workplace: Workplace) => ({
+                 ...workplace,
+                 defaultBreakMinutes:
+                   workplace.defaultBreakMinutes === 30
+                     ? 0
+                     : workplace.defaultBreakMinutes ?? 0,
+-              }));
++                rates: Array.isArray(workplace.rates)
++                  ? workplace.rates
++                  : [],
++              }))
++            : [];
+ 
+-            setWorkplaces(normalizedWorkplaces);
+-          } else {
+-            setWorkplaces([]);
+-          }
+-        }
++        const safePayouts: PayoutItem[] =
++          Array.isArray(parsedPayouts) ? parsedPayouts : [];
+ 
+-        if (savedPayouts) {
+-          setPayouts(JSON.parse(savedPayouts));
+-        }
++        const safeNotes: NoteItem[] =
++          Array.isArray(parsedNotes) ? parsedNotes : [];
+ 
+-        if (savedNotes) {
+-          setNotes(JSON.parse(savedNotes));
+-        }
++        entriesRef.current = safeEntries;
++        workplacesRef.current = safeWorkplaces;
++        payoutsRef.current = safePayouts;
++        notesRef.current = safeNotes;
++
++        setEntries(safeEntries);
++        setWorkplaces(safeWorkplaces);
++        setPayouts(safePayouts);
++        setNotes(safeNotes);
+ 
+         if (savedCurrency) {
++          currencyRef.current = savedCurrency;
+           setCurrencyState(savedCurrency);
+         }
+ 
+         if (savedUserName) {
++          userNameRef.current = savedUserName;
+           setUserNameState(savedUserName);
+         }
+ 
+         if (savedTheme === 'dark' || savedTheme === 'light') {
++          themeRef.current = savedTheme;
+           setThemeState(savedTheme);
+         }
+ 
+         if (savedAccentColor) {
++          accentColorRef.current = savedAccentColor;
+           setAccentColorState(savedAccentColor);
+         }
+       } catch (error) {
+         console.error('Помилка завантаження даних TIX:', error);
++      } finally {
++        loadedRef.current = true;
+       }
+     };
+ 
+-    loadData();
++    loadPromiseRef.current = loadData();
++
++    return () => {
++      mounted = false;
++    };
+   }, []);
+ 
+   // ---------------- ЗБЕРЕЖЕННЯ ДАНИХ ----------------
+ 
+   const saveEntries = async (
+     newEntries: Record<string, CalendarItem[]>,
+-  ) => {
++  ): Promise<void> => {
++    entriesRef.current = newEntries;
+     setEntries(newEntries);
+-
+-    try {
+-      await AsyncStorage.setItem(
+-        'tix_calendar_entries',
+-        JSON.stringify(newEntries),
+-      );
+-    } catch (error) {
+-      console.error('Не вдалося зберегти календар:', error);
+-    }
++    await enqueueSave('tix_calendar_entries', newEntries);
+   };
+ 
+-  const saveWorkplaces = async (newWorkplaces: Workplace[]) => {
++  const saveWorkplaces = async (
++    newWorkplaces: Workplace[],
++  ): Promise<void> => {
++    workplacesRef.current = newWorkplaces;
+     setWorkplaces(newWorkplaces);
+-
+-    try {
+-      await AsyncStorage.setItem(
+-        'tix_workplaces',
+-        JSON.stringify(newWorkplaces),
+-      );
+-    } catch (error) {
+-      console.error('Не вдалося зберегти місця роботи:', error);
+-    }
++    await enqueueSave('tix_workplaces', newWorkplaces);
+   };
+ 
+-  const savePayouts = async (newPayouts: PayoutItem[]) => {
++  const savePayouts = async (
++    newPayouts: PayoutItem[],
++  ): Promise<void> => {
++    payoutsRef.current = newPayouts;
+     setPayouts(newPayouts);
+-
+-    try {
+-      await AsyncStorage.setItem(
+-        'tix_payouts',
+-        JSON.stringify(newPayouts),
+-      );
+-    } catch (error) {
+-      console.error('Не вдалося зберегти виплати:', error);
+-    }
++    await enqueueSave('tix_payouts', newPayouts);
+   };
+ 
+-  const saveNotes = async (newNotes: NoteItem[]) => {
++  const saveNotes = async (
++    newNotes: NoteItem[],
++  ): Promise<void> => {
++    notesRef.current = newNotes;
+     setNotes(newNotes);
+-
+-    try {
+-      await AsyncStorage.setItem(
+-        'tix_notes',
+-        JSON.stringify(newNotes),
+-      );
+-    } catch (error) {
+-      console.error('Не вдалося зберегти нотатки:', error);
+-    }
++    await enqueueSave('tix_notes', newNotes);
+   };
+ 
+-  const setCurrency = async (curr: string) => {
++  const setCurrency = (curr: string): void => {
++    currencyRef.current = curr;
+     setCurrencyState(curr);
+-
+-    try {
+-      await AsyncStorage.setItem('tix_currency', curr);
+-    } catch (error) {
+-      console.error('Не вдалося зберегти валюту:', error);
+-    }
++    void enqueueSave('tix_currency', curr);
+   };
+ 
+-  const setUserName = async (name: string) => {
++  const setUserName = (name: string): void => {
++    userNameRef.current = name;
+     setUserNameState(name);
+-
+-    try {
+-      await AsyncStorage.setItem('tix_username', name);
+-    } catch (error) {
+-      console.error("Не вдалося зберегти ім'я:", error);
+-    }
++    void enqueueSave('tix_username', name);
+   };
+ 
+-  const setTheme = async (newTheme: 'dark' | 'light') => {
++  const setTheme = (newTheme: 'dark' | 'light'): void => {
++    themeRef.current = newTheme;
+     setThemeState(newTheme);
+-
+-    try {
+-      await AsyncStorage.setItem('tix_theme', newTheme);
+-    } catch (error) {
+-      console.error('Не вдалося зберегти тему:', error);
+-    }
++    void enqueueSave('tix_theme', newTheme);
+   };
+ 
+-  const setAccentColor = async (color: string) => {
++  const setAccentColor = (color: string): void => {
++    accentColorRef.current = color;
+     setAccentColorState(color);
+-
+-    try {
+-      await AsyncStorage.setItem('tix_accent_color', color);
+-    } catch (error) {
+-      console.error('Не вдалося зберегти колір:', error);
+-    }
++    void enqueueSave('tix_accent_color', color);
+   };
+ 
+   // ---------------- КАЛЕНДАР ----------------
+ 
+-  const addEntry = (date: string, item: NewCalendarItem) => {
+-    const newItem = {
+-      ...item,
+-      id: Date.now().toString(),
+-    } as CalendarItem;
++  const addEntry = (date: string, item: NewCalendarItem): void => {
++    void (async () => {
++      await waitUntilLoaded();
++
++      const newItem = {
++        ...item,
++        id: createId(),
++      } as CalendarItem;
++
++      const updated = {
++        ...entriesRef.current,
++        [date]: [
++          ...(entriesRef.current[date] || []),
++          newItem,
++        ],
++      };
+ 
+-    const updated = {
+-      ...entries,
+-      [date]: [...(entries[date] || []), newItem],
+-    };
++      await saveEntries(updated);
+ 
+-    void saveEntries(updated);
++      const key = `${date}:${newItem.id}`;
++      const version = nextNotificationVersion(key);
+ 
+-    void (async () => {
+-      const notificationId = await scheduleEntryNotification(newItem);
++      const notificationId =
++        await scheduleEntryNotification(newItem);
+ 
+       if (!notificationId) return;
+ 
+-      const updatedItems = (updated[date] || []).map((entry) =>
+-        entry.id === newItem.id
+-          ? { ...entry, notificationId }
+-          : entry,
++      if (!isNotificationVersionCurrent(key, version)) {
++        await cancelEntryNotification(notificationId);
++        return;
++      }
++
++      const currentDay = entriesRef.current[date] || [];
++      const stillExists = currentDay.some(
++        (entry) => entry.id === newItem.id,
+       );
+ 
+-      await saveEntries({
+-        ...updated,
+-        [date]: updatedItems,
+-      });
+-    })();
++      if (!stillExists) {
++        await cancelEntryNotification(notificationId);
++        return;
++      }
++
++      const finalEntries = {
++        ...entriesRef.current,
++        [date]: currentDay.map((entry) =>
++          entry.id === newItem.id
++            ? { ...entry, notificationId }
++            : entry,
++        ),
++      };
++
++      await saveEntries(finalEntries);
++    })().catch((error) => {
++      console.error('Помилка додавання запису календаря:', error);
++    });
+   };
+ 
+   const updateEntry = (
+     date: string,
+     id: string,
+     updatedFields: Partial<CalendarItem>,
+-  ) => {
+-    const dayItems = entries[date] || [];
+-    const oldItem = dayItems.find((item) => item.id === id);
++  ): void => {
++    void (async () => {
++      await waitUntilLoaded();
+ 
+-    if (!oldItem) return;
++      const dayItems = entriesRef.current[date] || [];
++      const oldItem = dayItems.find((item) => item.id === id);
+ 
+-    void (async () => {
+-      await cancelEntryNotification(oldItem.notificationId);
++      if (!oldItem) return;
+ 
+-      const updatedItems = dayItems.map((item) => {
+-        if (item.id !== id) return item;
++      const key = `${date}:${id}`;
++      const version = nextNotificationVersion(key);
+ 
+-        return {
+-          ...item,
+-          ...updatedFields,
+-          type: item.type,
+-        } as CalendarItem;
+-      });
++      const updatedItem = {
++        ...oldItem,
++        ...updatedFields,
++        id: oldItem.id,
++        type: oldItem.type,
++      } as CalendarItem;
++
++      const updatedEntries = {
++        ...entriesRef.current,
++        [date]: dayItems.map((item) =>
++          item.id === id ? updatedItem : item,
++        ),
++      };
++
++      await saveEntries(updatedEntries);
++
++      await cancelEntryNotification(oldItem.notificationId);
++
++      if (!isNotificationVersionCurrent(key, version)) {
++        return;
++      }
+ 
+-      const updatedItem = updatedItems.find((item) => item.id === id)!;
+       const notificationId =
+         await scheduleEntryNotification(updatedItem);
+ 
+-      const finalItems = updatedItems.map((item) =>
+-        item.id === id
+-          ? { ...item, notificationId }
+-          : item,
++      if (!isNotificationVersionCurrent(key, version)) {
++        if (notificationId) {
++          await cancelEntryNotification(notificationId);
++        }
++        return;
++      }
++
++      const latestDay = entriesRef.current[date] || [];
++      const latestItem = latestDay.find(
++        (item) => item.id === id,
+       );
+ 
+-      await saveEntries({
+-        ...entries,
+-        [date]: finalItems,
+-      });
+-    })();
++      if (!latestItem) {
++        if (notificationId) {
++          await cancelEntryNotification(notificationId);
++        }
++        return;
++      }
++
++      const finalEntries = {
++        ...entriesRef.current,
++        [date]: latestDay.map((item) =>
++          item.id === id
++            ? { ...item, notificationId }
++            : item,
++        ),
++      };
++
++      await saveEntries(finalEntries);
++    })().catch((error) => {
++      console.error('Помилка оновлення запису календаря:', error);
++    });
+   };
+ 
+-  const deleteEntry = (date: string, id: string) => {
+-    const item = (entries[date] || []).find(
+-      (entry) => entry.id === id,
+-    );
++  const deleteEntry = (date: string, id: string): void => {
++    void (async () => {
++      await waitUntilLoaded();
+ 
+-    if (item?.notificationId) {
+-      void cancelEntryNotification(item.notificationId);
+-    }
++      const key = `${date}:${id}`;
++      nextNotificationVersion(key);
+ 
+-    const updated = {
+-      ...entries,
+-      [date]: (entries[date] || []).filter(
+-        (entry) => entry.id !== id,
+-      ),
+-    };
++      const dayItems = entriesRef.current[date] || [];
++      const item = dayItems.find((entry) => entry.id === id);
++
++      if (item?.notificationId) {
++        await cancelEntryNotification(item.notificationId);
++      }
++
++      const updated = {
++        ...entriesRef.current,
++        [date]: dayItems.filter((entry) => entry.id !== id),
++      };
+ 
+-    void saveEntries(updated);
++      await saveEntries(updated);
++    })().catch((error) => {
++      console.error('Помилка видалення запису календаря:', error);
++    });
+   };
+ 
+   const getTodayEvents = (): CalendarItem[] => {
+@@ -462,20 +610,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+     let scheduledCount = 0;
+ 
+     Object.entries(entries).forEach(([date, items]) => {
+-      if (!date.startsWith(currentMonth)) {
+-        return;
+-      }
++      if (!date.startsWith(currentMonth)) return;
+ 
+       (items || []).forEach((item) => {
+-        if (item.type !== 'shift') {
+-          return;
+-        }
++        if (item.type !== 'shift') return;
+ 
+         if (item.status === 'completed') {
+           totalHours +=
+             Number(item.actualHours ?? item.hours) || 0;
+ 
+-          // Сумісність зі старими записами.
+           const net =
+             Number(item.netEarnings ?? item.earnings) || 0;
+ 
+@@ -500,8 +643,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+       });
+     });
+ 
+-    // Враховуємо виплати за вибраний місяць
+-    // у валюті, встановленій у застосунку.
+     let totalPayouts = 0;
+ 
+     payouts.forEach((payout) => {
+@@ -517,9 +658,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+       }
+     });
+ 
+-    const roundMoney = (value: number) =>
+-      Math.round((value + Number.EPSILON) * 100) / 100;
+-
+     totalEarnings = roundMoney(totalEarnings);
+     grossEarnings = roundMoney(grossEarnings);
+     totalTax = roundMoney(totalTax);
+@@ -527,13 +665,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+     totalPayouts = roundMoney(totalPayouts);
+     totalHours = roundMoney(totalHours);
+ 
+-    // Додатне значення: отримано більше за нарахований Net.
+-    // Від'ємне значення: отримано менше за нарахований Net.
+     const paymentDifference = roundMoney(
+       totalPayouts - totalEarnings,
+     );
+ 
+-    // Сума, яку ще потрібно отримати.
+     const unpaidBalance = roundMoney(
+       Math.max(0, totalEarnings - totalPayouts),
+     );
+@@ -554,130 +689,203 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
+ 
+   // ---------------- МІСЦЯ РОБОТИ ----------------
+ 
+-  const addWorkplace = (workplace: Omit<Workplace, 'id'>) => {
+-    const newWorkplace: Workplace = {
+-      ...workplace,
+-      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+-    };
++  const addWorkplace = (
++    workplace: Omit<Workplace, 'id'>,
++  ): void => {
++    void (async () => {
++      await waitUntilLoaded();
++
++      const newWorkplace: Workplace = {
++        ...workplace,
++        id: createId(),
++      };
+ 
+-    void saveWorkplaces([...workplaces, newWorkplace]);
++      await saveWorkplaces([
++        ...workplacesRef.current,
++        newWorkplace,
++      ]);
++    })().catch((error) => {
++      console.error('Помилка додавання місця роботи:', error);
++    });
+   };
+ 
+   const updateWorkplace = (
+     workplaceId: string,
+     updatedFields: Partial<Omit<Workplace, 'id' | 'rates'>>,
+-  ) => {
+-    const updated = workplaces.map((workplace) => {
+-      if (workplace.id !== workplaceId) {
+-        return workplace;
+-      }
++  ): void => {
++    void (async () => {
++      await waitUntilLoaded();
+ 
+-      return {
+-        ...workplace,
+-        ...updatedFields,
+-      };
+-    });
++      const updated = workplacesRef.current.map((workplace) => {
++        if (workplace.id !== workplaceId) return workplace;
++
++        return {
++          ...workplace,
++          ...updatedFields,
++        };
++      });
+ 
+-    void saveWorkplaces(updated);
++      await saveWorkplaces(updated);
++    })().catch((error) => {
++      console.error('Помилка оновлення місця роботи:', error);
++    });
+   };
+ 
+   const updateWorkplaceRates = (
+     workplaceId: string,
+     newRate: RateVersion,
+-  ) => {
+-    const updated = workplaces.map((workplace) => {
+-      if (workplace.id !== workplaceId) {
+-        return workplace;
+-      }
++  ): void => {
++    void (async () => {
++      await waitUntilLoaded();
+ 
+-      const existingRates = Array.isArray(workplace.rates)
+-        ? workplace.rates
+-        : [];
++      const updated = workplacesRef.current.map((workplace) => {
++        if (workplace.id !== workplaceId) return workplace;
+ 
+-      return {
+-        ...workplace,
+-        rates: [newRate, ...existingRates],
+-      };
+-    });
++        const existingRates = Array.isArray(workplace.rates)
++          ? workplace.rates
++          : [];
+ 
+-    void saveWorkplaces(updated);
++        return {
++          ...workplace,
++          rates: [newRate, ...existingRates],
++        };
++      });
++
++      await saveWorkplaces(updated);
++    })().catch((error) => {
++      console.error('Помилка оновлення ставок:', error);
++    });
+   };
+ 
+-  // Можна видалити будь-яке місце роботи, зокрема останнє.
+-  // Записи календаря та історія виплат автоматично не видаляються.
+-  const deleteWorkplace = (id: string) => {
+-    void saveWorkplaces(
+-      workplaces.filter((workplace) => workplace.id !== id),
+-    );
++  const deleteWorkplace = (id: string): void => {
++    void (async () => {
++      await waitUntilLoaded();
++
++      await saveWorkplaces(
++        workplacesRef.current.filter(
++          (workplace) => workplace.id !== id,
++        ),
++      );
++    })().catch((error) => {
++      console.error('Помилка видалення місця роботи:', error);
++    });
+   };
+ 
+   // ---------------- ВИПЛАТИ ----------------
+ 
+-  const addPayout = (payout: Omit<PayoutItem, 'id'>) => {
+-    const newPayout: PayoutItem = {
+-      ...payout,
+-      id: Date.now().toString(),
+-    };
++  const addPayout = (
++    payout: Omit<PayoutItem, 'id'>,
++  ): void => {
++    void (async () => {
++      await waitUntilLoaded();
++
++      const newPayout: PayoutItem = {
++        ...payout,
++        id: createId(),
++      };
+ 
+-    void savePayouts([newPayout, ...payouts]);
++      await savePayouts([
++        newPayout,
++        ...payoutsRef.current,
++      ]);
++    })().catch((error) => {
++      console.error('Помилка додавання виплати:', error);
++    });
+   };
+ 
+-  const deletePayout = (id: string) => {
+-    void savePayouts(
+-      payouts.filter((payout) => payout.id !== id),
+-    );
++  const deletePayout = (id: string): void => {
++    void (async () => {
++      await waitUntilLoaded();
++
++      await savePayouts(
++        payoutsRef.current.filter(
++          (payout) => payout.id !== id,
++        ),
++      );
++    })().catch((error) => {
++      console.error('Помилка видалення виплати:', error);
++    });
+   };
+ 
+   // ---------------- НОТАТКИ ----------------
+ 
+   const addNote = (
+     noteData: Omit<NoteItem, 'id' | 'createdAt' | 'updatedAt'>,
+-  ) => {
+-    const nowIso = new Date().toISOString();
+-
+-    const newNote: NoteItem = {
+-      ...noteData,
+-      id: Date.now().toString(),
+-      createdAt: nowIso,
+-      updatedAt: nowIso,
+-    };
++  ): void => {
++    void (async () => {
++      await waitUntilLoaded();
+ 
+-    void saveNotes([newNote, ...notes]);
+-  };
++      const nowIso = new Date().toISOString();
+ 
+-  const updateNote = (id: string, updated: Partial<NoteItem>) => {
+-    const updatedNotes = notes.map((note) => {
+-      if (note.id !== id) {
+-        return note;
+-      }
+-
+-      return {
+-        ...note,
+-        ...updated,
+-        updatedAt: new Date().toISOString(),
++      const newNote: NoteItem = {
++        ...noteData,
++        id: createId(),
++        createdAt: nowIso,
++        updatedAt: nowIso,
+       };
+-    });
+ 
+-    void saveNotes(updatedNotes);
++      await saveNotes([
++        newNote,
++        ...notesRef.current,
++      ]);
++    })().catch((error) => {
++      console.error('Помилка додавання нотатки:', error);
++    });
+   };
+ 
+-  const deleteNote = (id: string) => {
+-    void saveNotes(notes.filter((note) => note.id !== id));
++  const updateNote = (
++    id: string,
++    updated: Partial<NoteItem>,
++  ): void => {
++    void (async () => {
++      await waitUntilLoaded();
++
++      const updatedNotes = notesRef.current.map((note) => {
++        if (note.id !== id) return note;
++
++        return {
++          ...note,
++          ...updated,
++          id: note.id,
++          updatedAt: new Date().toISOString(),
++        };
++      });
++
++      await saveNotes(updatedNotes);
++    })().catch((error) => {
++      console.error('Помилка оновлення нотатки:', error);
++    });
+   };
+ 
+-  const togglePinNote = (id: string) => {
+-    const updatedNotes = notes.map((note) => {
+-      if (note.id !== id) {
+-        return note;
+-      }
++  const deleteNote = (id: string): void => {
++    void (async () => {
++      await waitUntilLoaded();
+ 
+-      return {
+-        ...note,
+-        pinned: !note.pinned,
+-      };
++      await saveNotes(
++        notesRef.current.filter((note) => note.id !== id),
++      );
++    })().catch((error) => {
++      console.error('Помилка видалення нотатки:', error);
+     });
++  };
++
++  const togglePinNote = (id: string): void => {
++    void (async () => {
++      await waitUntilLoaded();
+ 
+-    void saveNotes(updatedNotes);
++      const updatedNotes = notesRef.current.map((note) => {
++        if (note.id !== id) return note;
++
++        return {
++          ...note,
++          pinned: !note.pinned,
++        };
++      });
++
++      await saveNotes(updatedNotes);
++    })().catch((error) => {
++      console.error('Помилка закріплення нотатки:', error);
++    });
+   };
+ 
+   // ---------------- CONTEXT PROVIDER ----------------

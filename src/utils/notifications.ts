@@ -13,21 +13,28 @@ Notifications.setNotificationHandler({
 });
 
 export async function requestNotificationPermission(): Promise<boolean> {
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('calendar-reminders', {
-      name: 'Нагадування календаря',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      sound: 'default',
-    });
+  try {
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('calendar-reminders', {
+        name: 'Нагадування календаря',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+        sound: 'default',
+        lockscreenVisibility:
+          Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
+    }
+
+    const current = await Notifications.getPermissionsAsync();
+
+    if (current.granted) return true;
+
+    const requested = await Notifications.requestPermissionsAsync();
+    return requested.granted;
+  } catch (error) {
+    console.warn('Помилка дозволу на сповіщення:', error);
+    return false;
   }
-
-  const current = await Notifications.getPermissionsAsync();
-
-  if (current.granted) return true;
-
-  const requested = await Notifications.requestPermissionsAsync();
-  return requested.granted;
 }
 
 export async function cancelEntryNotification(
@@ -48,7 +55,7 @@ export async function scheduleEntryNotification(
   if (
     item.reminder === 'Без нагадування' ||
     !item.reminder ||
-    item.type === 'shift' && item.status === 'cancelled'
+    (item.type === 'shift' && item.status === 'cancelled')
   ) {
     return undefined;
   }
@@ -61,6 +68,11 @@ export async function scheduleEntryNotification(
 
   const eventDate = new Date(year, month - 1, day, hours, minutes);
 
+  if (Number.isNaN(eventDate.getTime())) {
+    console.warn('Некоректна дата або час події:', item.date, item.time);
+    return undefined;
+  }
+
   const reminderMinutes: Record<string, number> = {
     'За 10 хв': 10,
     'За 30 хв': 30,
@@ -68,7 +80,7 @@ export async function scheduleEntryNotification(
   };
 
   const minutesBefore = reminderMinutes[item.reminder];
-  if (!minutesBefore) return undefined;
+  if (minutesBefore === undefined) return undefined;
 
   const notificationDate = new Date(
     eventDate.getTime() - minutesBefore * 60_000,
@@ -79,7 +91,10 @@ export async function scheduleEntryNotification(
   try {
     return await Notifications.scheduleNotificationAsync({
       content: {
-        title: item.type === 'shift' ? 'Нагадування про зміну' : 'Нагадування про подію',
+        title:
+          item.type === 'shift'
+            ? 'Нагадування про зміну'
+            : 'Нагадування про подію',
         body: `${item.title} — початок о ${item.time}`,
         sound: 'default',
         data: {
