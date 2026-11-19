@@ -96,6 +96,7 @@ export interface NoteItem {
   id: string;
   title: string;
   body: string;
+  link?: string;
   tags: string[];
   pinned: boolean;
   linkedDate?: string;
@@ -323,8 +324,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({
         const safePayouts: PayoutItem[] =
           Array.isArray(parsedPayouts) ? parsedPayouts : [];
 
-        const safeNotes: NoteItem[] =
-          Array.isArray(parsedNotes) ? parsedNotes : [];
+        const safeNotes: NoteItem[] = Array.isArray(parsedNotes)
+  ? parsedNotes.map((note: Partial<NoteItem>) => ({
+      ...note,
+      id: typeof note.id === 'string' ? note.id : createId(),
+      title: typeof note.title === 'string' ? note.title : 'Без назви',
+      body: typeof note.body === 'string' ? note.body : '',
+      link: typeof note.link === 'string' ? note.link : '',
+      tags: Array.isArray(note.tags)
+        ? note.tags.filter(
+            (tag): tag is string => typeof tag === 'string',
+          )
+        : [],
+      pinned: Boolean(note.pinned),
+      createdAt:
+        typeof note.createdAt === 'string'
+          ? note.createdAt
+          : new Date().toISOString(),
+      updatedAt:
+        typeof note.updatedAt === 'string'
+          ? note.updatedAt
+          : typeof note.createdAt === 'string'
+            ? note.createdAt
+            : new Date().toISOString(),
+    }))
+  : [];
 
         entriesRef.current = safeEntries;
         workplacesRef.current = safeWorkplaces;

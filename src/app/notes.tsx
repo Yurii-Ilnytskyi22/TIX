@@ -11,12 +11,43 @@ import {
   ScrollView,
   TouchableWithoutFeedback,
   Keyboard,
+  Linking,
+  Alert,
 } from 'react-native';
 import { useApp, type NoteItem } from '../context/AppContext';
 import ScreenWrapper from '../components/ScreenWrapper';
 import { getLocalDateString } from '../utils/date';
 
 const CATEGORIES = ['Всі', 'Особисті', 'Робочі', 'Ідеї', 'Інше'];
+
+// Додає https://, якщо користувач увів адресу без протоколу,
+// та дозволяє відкривати лише звичайні HTTP(S)-посилання.
+const normalizeUrl = (value: string): string => {
+  const trimmed = value.trim();
+
+  if (!trimmed) return '';
+
+  const candidate = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(candidate);
+
+    if (
+      (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') ||
+      !parsed.hostname ||
+      !parsed.hostname.includes('.') ||
+      /\s/.test(trimmed)
+    ) {
+      return '';
+    }
+
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+};
 
 export default function NotesScreen() {
   const {
@@ -42,6 +73,7 @@ export default function NotesScreen() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [link, setLink] = useState('');
   const [category, setCategory] = useState('Особисті');
 
   const textColor = isDark ? '#ffffff' : '#09090b';
@@ -54,7 +86,14 @@ export default function NotesScreen() {
     setEditingNoteId(null);
     setTitle('');
     setBody('');
-    setCategory('Особисті');
+    setLink('');
+
+    setCategory(
+      selectedCategory !== 'Всі'
+        ? selectedCategory
+        : 'Особисті'
+    );
+
     setFormModalVisible(true);
   };
 
@@ -63,8 +102,30 @@ export default function NotesScreen() {
     setEditingNoteId(note.id);
     setTitle(note.title);
     setBody(note.body);
-    setCategory(note.tags[0] || 'Особисті');
+    setLink(note.link || '');
+    setCategory(note.tags?.[0] || 'Особисті');
     setFormModalVisible(true);
+  };
+
+  const handleOpenLink = async (value: string) => {
+    const url = normalizeUrl(value);
+
+    if (!url) {
+      Alert.alert(
+        'Некоректне посилання',
+        'Перевір адресу посилання. Приклад: google.com',
+      );
+      return;
+    }
+
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert(
+        'Не вдалося відкрити посилання',
+        'Перевір підключення або адресу посилання.',
+      );
+    }
   };
 
   const openViewModal = (note: NoteItem) => {
@@ -73,19 +134,40 @@ export default function NotesScreen() {
   };
 
   const handleSaveNote = () => {
-    if (!title.trim() && !body.trim()) return;
+    if (!title.trim() && !body.trim() && !link.trim()) {
+      Alert.alert(
+        'Порожня нотатка',
+        'Додай заголовок, текст або посилання.',
+      );
+      return;
+    }
+
+    let normalizedLink = '';
+
+    if (link.trim()) {
+      normalizedLink = normalizeUrl(link);
+
+      if (!normalizedLink) {
+        Alert.alert(
+          'Некоректне посилання',
+          'Введи правильну адресу, наприклад google.com',
+        );
+        return;
+      }
+    }
+
+    const noteData = {
+      title: title.trim() || 'Без назви',
+      body: body.trim(),
+      link: normalizedLink,
+      tags: [category],
+    };
 
     if (editingNoteId) {
-      updateNote(editingNoteId, {
-        title: title.trim() || 'Без назви',
-        body: body.trim(),
-        tags: [category],
-      });
+      updateNote(editingNoteId, noteData);
     } else {
       addNote({
-        title: title.trim() || 'Без назви',
-        body: body.trim(),
-        tags: [category],
+        ...noteData,
         pinned: false,
         linkedDate: getLocalDateString(),
       });
@@ -93,6 +175,7 @@ export default function NotesScreen() {
 
     setTitle('');
     setBody('');
+    setLink('');
     setEditingNoteId(null);
     setFormModalVisible(false);
     Keyboard.dismiss();
@@ -104,19 +187,88 @@ export default function NotesScreen() {
     setSelectedNote(null);
   };
 
-  const filteredNotes = notes.filter((note) => {
-    const query = searchQuery.toLowerCase();
+  const renderTextWithLinks = (value: string) => {
+  const regex = /((?:https?:\/\/|www\.)[^\s]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?)/gi;
 
-    const matchesSearch =
-      note.title.toLowerCase().includes(query) ||
-      note.body.toLowerCase().includes(query);
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
 
-    const matchesCategory =
-      selectedCategory === 'Всі' ||
-      note.tags.includes(selectedCategory);
+  while ((match = regex.exec(value)) !== null) {
+    let url = match[0];
+    let ending = '';
 
-    return matchesSearch && matchesCategory;
-  });
+    while (/[.,!?;:)]+$/.test(url)) {
+      ending = url.slice(-1) + ending;
+      url = url.slice(0, -1);
+    }
+
+    if (match.index > lastIndex) {
+      parts.push(
+        <Text key={`text-${lastIndex}`}>
+          {value.slice(lastIndex, match.index)}
+        </Text>
+      );
+    }
+
+    parts.push(
+      <Text
+        key={`link-${match.index}`}
+        style={{
+          color: '#38bdf8',
+          textDecorationLine: 'underline',
+        }}
+        onPress={() => handleOpenLink(url)}
+      >
+        {url}
+      </Text>
+    );
+
+    if (ending) {
+      parts.push(<Text key={`end-${match.index}`}>{ending}</Text>);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < value.length) {
+    parts.push(
+      <Text key={`text-${lastIndex}`}>
+        {value.slice(lastIndex)}
+      </Text>
+    );
+  }
+
+  return parts;
+};
+
+  const filteredNotes = [...notes]
+    .filter((note) => {
+      const query = searchQuery.toLowerCase();
+
+      const matchesSearch =
+        (note.title || '').toLowerCase().includes(query) ||
+        (note.body || '').toLowerCase().includes(query) ||
+        (note.link || '').toLowerCase().includes(query);
+
+      const matchesCategory =
+        selectedCategory === 'Всі' ||
+        (note.tags || []).includes(selectedCategory);
+
+      return matchesSearch && matchesCategory;
+    })
+    .sort((a, b) => {
+      // Закріплені нотатки завжди першими
+      if (a.pinned !== b.pinned) {
+        return Number(b.pinned) - Number(a.pinned);
+      }
+
+      // Усередині кожної групи — від нових до старих
+      const dateA = Date.parse(a.createdAt) || 0;
+      const dateB = Date.parse(b.createdAt) || 0;
+
+      return dateB - dateA;
+    });
 
   return (
     <ScreenWrapper>
@@ -140,7 +292,7 @@ export default function NotesScreen() {
         ]}
       >
         <Text style={styles.searchIcon}>🔍</Text>
-        <TextInput
+                <TextInput
           style={[styles.searchInput, { color: textColor }]}
           placeholder="Пошук нотаток..."
           placeholderTextColor="#71717a"
@@ -221,8 +373,19 @@ export default function NotesScreen() {
                     togglePinNote(note.id);
                   }}
                 >
-                  <Text style={styles.actionIcon}>
-                    {note.pinned ? '⭐' : '☆'}
+                  <Text
+                    style={[
+                      styles.actionIcon,
+                      {
+                        color: note.pinned
+                          ? '#fbbf24'
+                          : isDark
+                            ? '#e4e4e7'
+                            : '#64748b',
+                      },
+                    ]}
+                  >
+                    {note.pinned ? '★' : '☆'}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -232,7 +395,7 @@ export default function NotesScreen() {
                   style={[styles.noteBody, { color: subTextColor }]}
                   numberOfLines={2}
                 >
-                  {note.body}
+                  {renderTextWithLinks(note.body)}
                 </Text>
               ) : null}
 
@@ -247,7 +410,7 @@ export default function NotesScreen() {
                 ]}
               >
                 <Text style={styles.noteDate}>
-                  {note.linkedDate} · {note.tags[0] || 'Загальні'}
+                  {note.linkedDate || note.createdAt?.slice(0, 10) || ''} · {note.tags?.[0] || 'Загальні'}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -295,7 +458,7 @@ export default function NotesScreen() {
                       { color: ACCENT, backgroundColor: innerCardBg },
                     ]}
                   >
-                    {selectedNote?.tags[0] || 'Загальні'}
+                    {selectedNote?.tags?.[0] || 'Загальні'}
                   </Text>
 
                   <Text
@@ -327,11 +490,38 @@ export default function NotesScreen() {
                 </Text>
 
                 <Text style={[styles.viewBody, { color: textColor }]}>
-                  {selectedNote?.body || 'Текст нотатки відсутній'}
-                </Text>
-              </ScrollView>
+  {selectedNote?.body
+    ? renderTextWithLinks(selectedNote.body)
+    : 'Текст нотатки відсутній'}
+</Text>
 
-              <View
+                {selectedNote?.link ? (
+                  <TouchableOpacity
+                    style={[
+                      styles.linkButton,
+                      {
+                        backgroundColor: innerCardBg,
+                        borderColor: cardBorder,
+                      },
+                    ]}
+                    onPress={() => handleOpenLink(selectedNote.link || '')}
+                    accessibilityRole="link"
+                    accessibilityLabel="Відкрити посилання"
+                  >
+                    <Text style={styles.linkIcon}>🔗</Text>
+                    <Text
+                      style={[styles.linkText, { color: ACCENT }]}
+                      numberOfLines={2}
+                    >
+                      {selectedNote.link}
+                    </Text>
+                    <Text style={[styles.linkArrow, { color: ACCENT }]}>
+                      ↗
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </ScrollView>
+                            <View
                 style={[
                   styles.viewActionsRow,
                   {
@@ -484,6 +674,30 @@ export default function NotesScreen() {
                     />
                   </View>
 
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>
+                      Посилання (необов'язково)
+                    </Text>
+                    <TextInput
+                      style={[
+                        styles.textInput,
+                        {
+                          backgroundColor: innerCardBg,
+                          color: textColor,
+                          borderColor: cardBorder,
+                        },
+                      ]}
+                      placeholder="Наприклад: https://google.com"
+                      placeholderTextColor="#71717a"
+                      value={link}
+                      onChangeText={setLink}
+                      keyboardType="url"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      returnKeyType="done"
+                    />
+                  </View>
+
                   <View style={styles.modalButtonsRow}>
                     <TouchableOpacity
                       style={[
@@ -534,7 +748,6 @@ export default function NotesScreen() {
     </ScreenWrapper>
   );
 }
-
 const styles = StyleSheet.create({
   brandHeader: {
     marginBottom: 20,
@@ -725,6 +938,28 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 24,
     marginBottom: 20,
+  },
+    linkButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 20,
+    gap: 10,
+  },
+  linkIcon: {
+    fontSize: 18,
+  },
+  linkText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  linkArrow: {
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   viewActionsRow: {
     flexDirection: 'row',
